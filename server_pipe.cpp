@@ -40,7 +40,7 @@ struct GameState {
 
 class Server {
     GameState state;
-    pthread_mutex_t lock; // [동기화] 공유 자원 GameState 보호
+    pthread_mutex_t lock; 
     pthread_t receive_thread, broadcast_thread;
     bool running;
     int request_fd;
@@ -54,7 +54,6 @@ public:
             exit(1);
         }
 
-        // [FIFO] O_RDWR로 열어 읽기/쓰기 쓰레드 간 블로킹 방지
         request_fd = open(REQUEST_FIFO, O_RDWR);
         if (request_fd == -1) {
             perror("open REQUEST_FIFO O_RDWR error");
@@ -62,7 +61,6 @@ public:
             exit(1);
         }
         
-        // [안정성] SIGPIPE 무시 설정 (클라이언트 종료 시 서버 종료 방지)
         signal(SIGPIPE, SIG_IGN); 
 
         state.current_num = 0;
@@ -78,6 +76,7 @@ public:
 
     // --- 1. 요청 수신 쓰레드 (FIFO Read) ---
     static auto receiveThreadFunc(void* arg) -> void* {
+        // ... (이전 코드와 동일) ...
         Server* server = (Server*)arg;
         ClientRequest req;
         
@@ -104,15 +103,15 @@ public:
 
     // --- 2. 게임 로직 처리 함수 (뮤텍스로 보호되는 임계 구역) ---
     void processRequest(const ClientRequest& req) {
-        
-        pthread_mutex_lock(&lock); // 락 획득: 공유 자원(GameState) 접근 시작
+        // ... (이전 코드와 동일) ...
+        pthread_mutex_lock(&lock); 
 
         if (state.gameover) {
             pthread_mutex_unlock(&lock);
             return;
         }
 
-        // 1. 플레이어 등록 및 초기 턴 설정
+        // 1. 플레이어 등록 및 초기 턴 설정 
         if (state.player_pipes.find(req.playerId) == state.player_pipes.end()) {
             state.player_pipes[req.playerId] = req.client_pipe_path;
             state.active_players.push_back(req.playerId);
@@ -128,7 +127,7 @@ public:
             return;
         }
         
-        // 2. 턴 검사 (접근 거절 시연)
+        // 2. 턴 검사 
         if (req.playerId != state.current_turn) {
             cout << "[ Logic ] P" << req.playerId << " 접근 거절 (턴이 아님)." << endl;
             pthread_mutex_unlock(&lock);
@@ -142,7 +141,7 @@ public:
              return;
         }
 
-        // 숫자 증가 로직 (핵심 동기화 구간)
+        // 숫자 증가 로직
         ostringstream shouted_sequence; 
         
         for (int i = 0; i < req.count; ++i) {
@@ -179,7 +178,7 @@ public:
             }
         }
         
-        pthread_mutex_unlock(&lock); // 락 해제
+        pthread_mutex_unlock(&lock); 
     }
 
     // --- 3. 상태 브로드캐스트 쓰레드 (FIFO Write) ---
@@ -191,7 +190,39 @@ public:
             
             pthread_mutex_lock(&server->lock);
             
-            // 상태 메시지 구성 및 전파 (생략된 부분은 상태를 전파하는 로직입니다.)
+            // 상태 메시지 구성
+            if (server->state.gameover) {
+                status = "END: " + string(server->state.last_caller) + " is the loser. Final number: " + to_string(server->state.current_num);
+            } else {
+                status = "CURRENT:" + to_string(server->state.current_num) + 
+                         " TURN:" + to_string(server->state.current_turn) + 
+                         " PARTICIPANTS:" + to_string(server->state.active_players.size());
+            }
+
+            // 모든 접속된 클라이언트에게 상태 전파 (연결 끊김 감지 및 정리 로직 포함)
+            vector<int> disconnected_players; 
+
+            for (const auto& pair : server->state.player_pipes) {
+                int resp_fd = open(pair.second.c_str(), O_WRONLY | O_NONBLOCK);
+                if (resp_fd != -1) {
+                    write(resp_fd, status.c_str(), status.length() + 1);
+                    close(resp_fd);
+                } else if (errno == ENXIO) {
+                    disconnected_players.push_back(pair.first);
+                }
+            }
+            
+            // 연결 끊긴 플레이어 정리
+            for (int id : disconnected_players) {
+                server->state.player_pipes.erase(id);
+                server->state.active_players.erase(
+                    remove(server->state.active_players.begin(), server->state.active_players.end(), id),
+                    server->state.active_players.end()
+                );
+            }
+
+            // [수정된 로그] 참여자 수 제거
+            cout << "[ BCAST Thread ] 현재 숫자: " << server->state.current_num << ", 다음 턴: P" << server->state.current_turn << endl; 
             
             pthread_mutex_unlock(&server->lock);
             
