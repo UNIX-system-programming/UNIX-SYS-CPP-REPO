@@ -65,8 +65,7 @@ public:
         ShrClient02* client = static_cast<ShrClient02*>(arg);
         
         while (client->running) {
-            if (client->data->gameover) {
-                cout << "\n[ Client 02 ] 게임 종료! " << client->data->last_caller << " 이 31을 외쳤습니다!" << endl;
+            if (client->data->gameover) {  
                 client->running = false;
                 break;
             }
@@ -98,11 +97,15 @@ public:
         cout << "[ Client 02 ] Client 1을 기다리는 중..." << endl;
         sleep(3);
 
+        int prev_turn = -1;
         while (running && !data->gameover) {
+            // 대기 중일 때는 턴 변화가 있을 때만 간단히 출력합니다.
             while (data->current_turn != playerId && running && !data->gameover) {
-                cout << "[ Client 02 ] 턴을 기다리는 중... (현재 숫자: " 
-                     << data->current_num << ", 다음 순서: " << data->current_turn << ")" << endl;
-                sleep(2);
+                if (prev_turn != data->current_turn) {
+                    cout << "[ Client 02 ] 상대 턴... (현재 숫자: " << data->current_num << ", 다음 턴: " << data->current_turn << ")" << endl;
+                    prev_turn = data->current_turn;
+                }
+                sleep(1);
             }
 
             if (!running || data->gameover) break;
@@ -112,22 +115,20 @@ public:
             // 요청을 서버에 전송한 후 공유 메모리의 변경을 관찰합니다
             int prev = data->current_num;
             sendMove(count);
-            // 서버가 요청을 처리하는 동안 대기합니다.
-            // 서버는 current_num을 요청한 개수만큼 증가시키고 이후 current_turn을 변경합니다.
+
             while (!data->gameover) {
                 if (data->current_num > prev) {
                     for (int n = prev + 1; n <= data->current_num; ++n) {
                         cout << "[ Client 02 ] " << n << endl;
-                        usleep(200000);
+                        usleep(150000);
                     }
                     prev = data->current_num;
                 }
-                // 서버가 턴을 다른 플레이어로 넘기면 반복을 종료합니다
                 if (data->current_turn != playerId) break;
                 usleep(100000);
             }
-            cout << "[ Client 02 ] 현재 숫자: " << data->current_num << endl;
 
+            prev_turn = data->current_turn;
             sleep(1);
         }
     }

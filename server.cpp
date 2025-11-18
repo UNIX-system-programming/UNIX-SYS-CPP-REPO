@@ -104,21 +104,38 @@ public:
                     pthread_mutex_unlock(&server->lock);
                     continue;
                 }
-                cout << "[ Server ] Process ID " << playerId << " 요청 (정수" << cnt << " 개)" << endl;
-                for (int i = 0; i < cnt; i++) {
-                    server->data->current_num++;
-                    cout << "[ Server ] 현재 숫자: " << server->data->current_num << endl;
-                    if (server->data->current_num >= MAX_NUM) {
-                        server->data->gameover = true;
-                        char buffer[50];
-                        sprintf(buffer, "Client %d", playerId);
-                        strcpy(server->data->last_caller, buffer);
-                        cout << endl << "[ Server ] GAME OVER - 프로세스" << server->data->last_caller << "가 숫자 31을 외침!" << endl;
-                        pthread_mutex_unlock(&server->lock);
-                        server->running = false;
-                        pthread_exit(nullptr);
-                    }
+                // 요청한 개수만큼 current_num을 증가시키고 한 번에 요약 출력합니다.
+                int start = server->data->current_num + 1;
+                int end = start + cnt - 1;
+                if (end > MAX_NUM) end = MAX_NUM;
+                // 실제 증가
+                for (int i = start; i <= end; ++i) {
+                    server->data->current_num = i;
+                    if (server->data->current_num >= MAX_NUM) break;
                     sleep(1);
+                }
+                // 출력: 어떤 숫자를 외쳤는지 요약해서 보여줌
+                {
+                    char buf[200];
+                    if (start <= server->data->current_num) {
+                        int printed_end = server->data->current_num;
+                        int len = snprintf(buf, sizeof(buf), "[ Server ] Client %d 외친 숫자: ", playerId);
+                        for (int v = start; v <= printed_end; ++v) {
+                            len += snprintf(buf + len, sizeof(buf) - len, "%d", v);
+                            if (v < printed_end) len += snprintf(buf + len, sizeof(buf) - len, " ");
+                        }
+                        printf("%s\n", buf);
+                    }
+                }
+                if (server->data->current_num >= MAX_NUM) {
+                    server->data->gameover = true;
+                    char buffer[50];
+                    sprintf(buffer, "Client %d", playerId);
+                    strcpy(server->data->last_caller, buffer);
+                    cout << "\n[ Server ] GAME OVER - 프로세스" << server->data->last_caller << " 가 숫자 31을 외침" << endl;
+                    pthread_mutex_unlock(&server->lock);
+                    server->running = false;
+                    pthread_exit(nullptr);
                 }
                 server->data->current_turn = (playerId == 1) ? 2 : 1;
                 pthread_mutex_unlock(&server->lock);
@@ -139,17 +156,30 @@ public:
                     int playerId, cnt;
                     sscanf(buf, "%d %d", &playerId, &cnt);
                     cout << "[ PIPE ] 요청 수신 -> P" << playerId << " " << cnt << "개" << endl;
-                    for (int i = 0; i < cnt; i++) {
-                        server->data->current_num++;
-                        cout << "[ PIPE ] 현재 숫자 -> " << server->data->current_num << endl;
-                        if (server->data->current_num >= MAX_NUM) {
-                            server->data->gameover = true;
-                            strcpy(server->data->last_caller, ("P" + to_string(playerId)).c_str());
-                            cout << "[ PIPE ] 게임 종료 (" << server->data->last_caller << "가 31을 외침)" << endl;
-                            pthread_mutex_unlock(&server->lock);
-                            pthread_exit(nullptr);
-                        }
+                    // 요약해서 한 번에 출력
+                    int start = server->data->current_num + 1;
+                    int end = start + cnt - 1;
+                    if (end > MAX_NUM) end = MAX_NUM;
+                    for (int i = start; i <= end; ++i) {
+                        server->data->current_num = i;
+                        if (server->data->current_num >= MAX_NUM) break;
                         sleep(1);
+                    }
+                    if (start <= server->data->current_num) {
+                        char buf[200];
+                        int len = snprintf(buf, sizeof(buf), "[ PIPE ] P%d 외친 숫자: ", playerId);
+                        for (int v = start; v <= server->data->current_num; ++v) {
+                            len += snprintf(buf + len, sizeof(buf) - len, "%d", v);
+                            if (v < server->data->current_num) len += snprintf(buf + len, sizeof(buf) - len, " ");
+                        }
+                        printf("%s\n", buf);
+                    }
+                    if (server->data->current_num >= MAX_NUM) {
+                        server->data->gameover = true;
+                        snprintf(server->data->last_caller, sizeof(server->data->last_caller), "P%d", playerId);
+                        cout << "[ PIPE ] GAME OVER - " << server->data->last_caller << " said 31!" << endl;
+                        pthread_mutex_unlock(&server->lock);
+                        pthread_exit(nullptr);
                     }
                     server->data->current_turn = (playerId == 1) ? 2 : 1;    
                 }
