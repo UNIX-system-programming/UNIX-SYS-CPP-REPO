@@ -37,7 +37,6 @@ class ShrClient01 {
 
 public:
     ShrClient01() : playerId(PLAYER_ID), running(true) {
-        // 공유 메모리 접근
         shmId = shmget(SHM_KEY, sizeof(SharedData), 0666);
         if (shmId == -1) {
             perror("shmget failed");
@@ -49,7 +48,6 @@ public:
             exit(1);
         }
 
-        // 메시지 큐 접근
         msgId = msgget(MSG_KEY, 0666);
         if (msgId == -1) {
             perror("msgget failed");
@@ -57,8 +55,8 @@ public:
         }
 
         cout << "================================================" << endl;
-        cout << "[ Client 01 ] 베스킨라빈스 31 게임 클라이언트 시작" << endl;
-        cout << "[ Client 01 ] 공유 메모리를 통한 통신" << endl;
+        cout << "[ Client 01 ] 베스킨라빈스 31 서버 가동 시작" << endl;
+        cout << "[ Client 01 ] Shared Memory" << endl;
         cout << "[ Client 01 ] Player ID: " << playerId << endl;
         cout << "================================================" << endl;
     }
@@ -68,7 +66,7 @@ public:
         
         while (client->running) {
             if (client->data->gameover) {
-                cout << "\n[ Client 01 ] GAME OVER! " << client->data->last_caller << "가 31을 외쳤습니다!" << endl;
+                cout << "\n[ Client 01 ] 게임 종료! " << client->data->last_caller << "이 31을 외쳤습니다!" << endl;
                 client->running = false;
                 break;
             }
@@ -81,9 +79,9 @@ public:
         MsgQueue msg;
         memset(&msg, 0, sizeof(msg));
         msg.msg_type = 1;
-        sprintf(msg.msg_text, "%d %d", playerId, count);
+        snprintf(msg.msg_text, sizeof(msg.msg_text), "%d %d", playerId, count);
 
-        if (msgsnd(msgId, &msg, sizeof(msg.msg_text), 0) == -1) {
+        if (msgsnd(msgId, &msg, 100, 0) == -1) {
             perror("msgsnd failed");
             return false;
         }
@@ -98,40 +96,34 @@ public:
         srand(time(nullptr) + playerId);
 
         while (running && !data->gameover) {
-            // 현재 턴이 아니면 대기
             while (data->current_turn != playerId && running && !data->gameover) {
-                cout << "[ Client 01 ] 상대 차례입니다. 대기 중... (현재 숫자: " 
+                cout << "[ Client 01 ] 턴을 기다리는 중... (현재 숫자: " 
                      << data->current_num << ", 다음 턴: " << data->current_turn << ")" << endl;
                 sleep(2);
             }
 
             if (!running || data->gameover) break;
 
-            // 1~3개의 숫자를 외칠 수 있음
             int count = (rand() % 3) + 1;
 
-            cout << "\n[ Client 01 ] 게임 시작 (현재 숫자: " << data->current_num << ")" << endl;
-            cout << "[ Client 01 ] " << count << "개의 숫자를 외치겠습니다" << endl;
-
-            for (int i = 0; i < count; i++) {
-                data->current_num++;
-                cout << "[ Client 01 ] " << data->current_num << endl;
-
-                if (data->current_num >= MAX_NUM) {
-                    data->gameover = true;
-                    strcpy(data->last_caller, "Client 01");
-                    cout << "\n[ Client 01 ] 31을 외쳤습니다... 졌습니다!" << endl;
-                    running = false;
-                    break;
+            // 요청을 서버에 전송한 후 공유 메모리의 변경을 관찰합니다
+            int prev = data->current_num;
+            sendMove(count);
+            // 서버가 요청을 처리하는 동안 대기합니다.
+            // 서버는 current_num을 요청한 개수만큼 증가시키고 이후 current_turn을 변경합니다.
+            while (!data->gameover) {
+                if (data->current_num > prev) {
+                    for (int n = prev + 1; n <= data->current_num; ++n) {
+                        cout << "[ Client 01 ] " << n << endl;
+                        usleep(200000); // 200ms to simulate speaking pace
+                    }
+                    prev = data->current_num;
                 }
-                sleep(1);
+                // 서버가 턴을 다른 플레이어로 넘기면 반복을 종료합니다
+                if (data->current_turn != playerId) break;
+                usleep(100000);
             }
-
-            // 턴 넘기기
-            if (!data->gameover) {
-                data->current_turn = (playerId == 1) ? 2 : 1;
-                cout << "[ Client 01 ] 턴을 넘겼습니다. 상대 차례입니다." << endl;
-            }
+            cout << "[ Client 01 ] 현재 숫자: " << data->current_num << endl;
 
             sleep(1);
         }

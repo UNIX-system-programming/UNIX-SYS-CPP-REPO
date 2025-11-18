@@ -91,7 +91,7 @@ public:
 
         while (server->running) {
             memset(&msg, 0, sizeof(msg));
-            if (msgrcv(server->msgId, &msg, sizeof(msg.msg_text), 1, 0) != -1) {
+            if (msgrcv(server->msgId, &msg, 100, 1, 0) != -1) {
                 pthread_mutex_lock(&server->lock);
                 if (server->data->gameover) {
                     pthread_mutex_unlock(&server->lock);
@@ -104,22 +104,23 @@ public:
                     pthread_mutex_unlock(&server->lock);
                     continue;
                 }
-                cout << "[ Server ] Process ID " << playerId << " 요청 (정수 " << cnt << "개)" << endl;
+                cout << "[ Server ] Process ID " << playerId << " 요청 (정수" << cnt << " 개)" << endl;
                 for (int i = 0; i < cnt; i++) {
                     server->data->current_num++;
-                    cout << "[ Server ] 현재 숫자 : " << server->data->current_num << endl;
+                    cout << "[ Server ] 현재 숫자: " << server->data->current_num << endl;
                     if (server->data->current_num >= MAX_NUM) {
                         server->data->gameover = true;
-                        // to_string() 통해 문자열 객체로 변환 후 다시 char * 타입으로 변환 (반드시 해줘야 함)
-                        strcpy(server->data->last_caller, ("Process ID " + to_string(playerId)).c_str());
-                        cout << endl << "[ Server ] GAME OVER - 프로세스 " << server->data->last_caller << "가 숫자 31을 외침" << endl;
+                        char buffer[50];
+                        sprintf(buffer, "Client %d", playerId);
+                        strcpy(server->data->last_caller, buffer);
+                        cout << endl << "[ Server ] GAME OVER - 프로세스" << server->data->last_caller << "가 숫자 31을 외침!" << endl;
                         pthread_mutex_unlock(&server->lock);
                         server->running = false;
                         pthread_exit(nullptr);
                     }
                     sleep(1);
                 }
-                server->data->current_turn = (playerId == 1) ? 2 : 1; // 턴 교체
+                server->data->current_turn = (playerId == 1) ? 2 : 1;
                 pthread_mutex_unlock(&server->lock);
             }
         }
@@ -167,7 +168,7 @@ public:
                 pthread_mutex_unlock(&server->lock);
                 break;
             }
-            cout << "[ Server ] 상태 전파 (현재 숫자 = " << server->data->current_num << ", 다음 턴 Proceess ID " << server->data->current_turn << ")" << endl;
+            cout << "[ Server ] 상태 전파 (현재 숫자 = " << server->data->current_num << ", 다음 턴 Process ID " << server->data->current_turn << ")" << endl;
             pthread_mutex_unlock(&server->lock);
             sleep(3);
         }
