@@ -29,6 +29,7 @@ struct SharedData {
     int current_num; // 현재 숫자
     int current_turn; // 현재 턴
     char last_caller[20];
+    int connected_players; // 접속한 클라이언트 수
     bool gameover;
 };// 공유 메모리 구조체
 
@@ -75,6 +76,7 @@ public:
         // 초기 값 설정
         data->current_num = 0;
         data->current_turn = 1;
+        data->connected_players = 0;
         data->gameover = false;
         strcpy(data->last_caller, "[ nullptr ]");
 
@@ -91,16 +93,33 @@ public:
 
         while (server->running) {
             memset(&msg, 0, sizeof(msg));
-            if (msgrcv(server->msgId, &msg, 100, 1, 0) != -1) {
+            // mtype = 0 => 어떤 타입이든 첫 메시지를 받아옵니다.
+            if (msgrcv(server->msgId, &msg, 100, 0, 0) != -1) {
                 pthread_mutex_lock(&server->lock);
                 if (server->data->gameover) {
                     pthread_mutex_unlock(&server->lock);
                     continue;
                 }
+                // 등록 메시지 (msg_type == 2)
+                if (msg.msg_type == 2) {
+                    int pid = 0;
+                    sscanf(msg.msg_text, "%d", &pid);
+                    server->data->connected_players++;
+                    cout << "[ Server ] Client registered: id=" << pid << " (total=" << server->data->connected_players << ")" << endl;
+                    pthread_mutex_unlock(&server->lock);
+                    continue;
+                }
+                // 게임 동작 메시지 (msg_type == 1)
                 int playerId, cnt; // playerId 추후 PID로 수정 예정
                 sscanf(msg.msg_text, "%d %d", &playerId, &cnt);
+                // 게임 시작 전에는 이동을 처리하지 않습니다.
+                if (server->data->connected_players < PLAYERS) {
+                    cout << "[ Server ] 아직 플레이어가 모두 접속하지 않았습니다. 무시: Client " << playerId << endl;
+                    pthread_mutex_unlock(&server->lock);
+                    continue;
+                }
                 if (playerId != server->data->current_turn) {
-                    cout << "[ Server ] Process ID " << playerId << "접근 거절 (본인 순서가 아님)" << endl;
+                    cout << "[ Server ] Process ID " << playerId << " 접근 거절 (본인 순서가 아님)" << endl;
                     pthread_mutex_unlock(&server->lock);
                     continue;
                 }
@@ -198,7 +217,7 @@ public:
                 pthread_mutex_unlock(&server->lock);
                 break;
             }
-            cout << "[ Server ] 상태 전파 (현재 숫자 = " << server->data->current_num << ", 다음 턴 Process ID " << server->data->current_turn << ")" << endl;
+            cout << "[ Server ] 현재 숫자 = " << server->data->current_num << ", 다음 턴 Process ID " << server->data->current_turn << endl;
             pthread_mutex_unlock(&server->lock);
             sleep(3);
         }

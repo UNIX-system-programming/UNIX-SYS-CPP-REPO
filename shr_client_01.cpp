@@ -25,6 +25,7 @@ struct SharedData {
     int current_num;
     int current_turn;
     char last_caller[20];
+    int connected_players;
     bool gameover;
 };
 
@@ -91,8 +92,29 @@ public:
         pthread_create(&monitorThread, nullptr, monitorThreadFunc, this);
     }
 
+    // 서버에 등록 메시지를 보냅니다 (접속 알림)
+    auto sendRegister() -> bool {
+        MsgQueue msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.msg_type = 2; // 등록
+        snprintf(msg.msg_text, sizeof(msg.msg_text), "%d", playerId);
+        if (msgsnd(msgId, &msg, 100, 0) == -1) {
+            perror("register msgsnd failed");
+            return false;
+        }
+        return true;
+    }
+
     auto play() -> void {
         srand(time(nullptr) + playerId);
+        // 서버에 접속 등록
+        sendRegister();
+
+        // 최소 PLAYERS명이 접속할 때까지 대기
+        while (!data->gameover && data->connected_players < PLAYERS) {
+            cout << "[ Client 01 ] 플레이어를 기다리는 중... (현재 접속=" << data->connected_players << ")" << endl;
+            sleep(1);
+        }
 
         int prev_turn = -1;
         while (running && !data->gameover) {
