@@ -1,215 +1,236 @@
-#include <iostream>
-#include <cstring>
-#include <string>
-#include <csignal>
-#include <pthread.h>
-#include <sys/ipc.h>
-#include <sys/shm.h>
-#include <sys/msg.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <errno.h>
-using namespace std;
-// string은 객체라 사용 시 에러 발생하니 cstring 사용
-// 정 쓰고 싶으면 string_view() 쓰면 되는데 복잡해짐
+#include "headerSet.hpp"
 
-#define SHM_KEY 60011
-#define MSG_KEY 60012
-#define PLAYERS 2
-#define MAX_NUM 31
-#define PIPE_PATH "/tmp/br31_server_fifo"
+// system call -> C style
+// struct of logic -> Modern C++
 
-struct MsgQueue {
-    long msg_type;
-    char msg_text[100];
-}; // message queue 구조체
-
-struct SharedData {
-    int current_num; // 현재 숫자
-    int current_turn; // 현재 턴
-    char last_caller[20];
-    bool gameover;
-};// 공유 메모리 구조체
-
-class Server {
-    int shmId, msgId, pipeFd;
-    SharedData* data;
+// [ SRP : 단일 책임 원칙 ] -> 상태 접근/갱신 기능만 담당
+// [ 캡슐화 ] -> 데이터 보호 및 뮤텍스로 동기화
+class GameState {
+    SharedData *data;
     pthread_mutex_t lock;
-    // 클라이언트 요청 수신용 & 게임 상태 브로드캐스트 용 threadId
-    pthread_t recieve, broadcast, recieve_pipe;
-    bool running;
 public:
-    Server() : running{true} {
+    explicit GameState(SharedData* ptr) : data{ptr} {
         pthread_mutex_init(&lock, nullptr);
-
-        // 아래는 공유 메모리 생성 로직
-        shmId = shmget(SHM_KEY, sizeof(SharedData), 0666 | IPC_CREAT);
-        if (shmId == -1) {
-            perror("result of shmget sys call");
-            exit(1);
-        }
-        data = (SharedData*)shmat(shmId, nullptr, 0);
-        memset(data, 0, sizeof(SharedData));
-
-        // 메세지 큐 생성 로직
-        msgId = msgget(MSG_KEY, 0666 | IPC_CREAT);
-        if (msgId == -1) {
-            perror("result of msgget sys call");
-            exit(1);
-        }
-
-        // fifo 생성
-        if (mkfifo(PIPE_PATH, 0666) == -1 && errno != EEXIST) {
-            perror("open FIFO");
-            exit(1);
-        }
-
-        pipeFd = open(PIPE_PATH, O_RDONLY | O_NONBLOCK);
-        // client 에서는 open(PIPE_PATH, O_WRONLY);
-        if (pipeFd == -1) {
-            perror("open FIFO");
-            exit(1);
-        }
-
-        // 초기 값 설정
-        data->current_num = 0;
-        data->current_turn = 1;
-        data->gameover = false;
-        strcpy(data->last_caller, "[ nullptr ]");
-
-        cout << "============================================" << endl;
-        cout << "[ Server ] -> 베스킨라빈스 31 서버 가동 시작" << endl;
-        cout << "[ Server ] -> Message Queue + SharedMemory + PIPE 지원" << endl;
-        cout << "============================================" << endl;
     }
-    static auto recieveThreadFunc(void* arg) -> void* {
-        // void* 타입은 모든 포인터 타입을 형 변환 없이 받을 수 있음
-        // 다만 void* 타입을 다른 값에 대입 시 반드시 형 변환 필요 (안 하면 에러남)
-        Server* server = static_cast<Server*>(arg);
-        MsgQueue msg;
-
-        while (server->running) {
-            memset(&msg, 0, sizeof(msg));
-            if (msgrcv(server->msgId, &msg, sizeof(msg.msg_text), 1, 0) != -1) {
-                pthread_mutex_lock(&server->lock);
-                if (server->data->gameover) {
-                    pthread_mutex_unlock(&server->lock);
-                    continue;
-                }
-                int playerId, cnt; // playerId 추후 PID로 수정 예정
-                sscanf(msg.msg_text, "%d %d", &playerId, &cnt);
-                if (playerId != server->data->current_turn) {
-                    cout << "[ Server ] Process ID " << playerId << "접근 거절 (본인 순서가 아님)" << endl;
-                    pthread_mutex_unlock(&server->lock);
-                    continue;
-                }
-                cout << "[ Server ] Process ID " << playerId << " 요청 (정수 " << cnt << "개)" << endl;
-                for (int i = 0; i < cnt; i++) {
-                    server->data->current_num++;
-                    cout << "[ Server ] 현재 숫자 : " << server->data->current_num << endl;
-                    if (server->data->current_num >= MAX_NUM) {
-                        server->data->gameover = true;
-                        // to_string() 통해 문자열 객체로 변환 후 다시 char * 타입으로 변환 (반드시 해줘야 함)
-                        strcpy(server->data->last_caller, ("Process ID " + to_string(playerId)).c_str());
-                        cout << endl << "[ Server ] GAME OVER - 프로세스 " << server->data->last_caller << "가 숫자 31을 외침" << endl;
-                        pthread_mutex_unlock(&server->lock);
-                        server->running = false;
-                        pthread_exit(nullptr);
-                    }
-                    sleep(1);
-                }
-                server->data->current_turn = (playerId == 1) ? 2 : 1; // 턴 교체
-                pthread_mutex_unlock(&server->lock);
-            }
+    auto isGameOver() -> bool {
+        pthread_mutex_lock(&lock);
+        bool over = data->gameover;
+        pthread_mutex_unlock(&lock);
+        return over;
+    }
+    auto getNumber() -> int {
+        pthread_mutex_lock(&lock);
+        int n = data->current_num;
+        pthread_mutex_unlock(&lock);
+        return n;
+    }
+    auto getTurn() -> int {
+        pthread_mutex_lock(&lock);
+        int t = data->current_turn;
+        pthread_mutex_unlock(&lock);
+        return t;
+    }
+    auto getCaller() -> string {
+        pthread_mutex_lock(&lock);
+        string s = data->last_caller;
+        pthread_mutex_unlock(&lock);
+        return s;
+    }
+    auto updateNumber(int cnt) -> void {
+        for (int i = 0; i < cnt; i++) {
+            pthread_mutex_lock(&lock);
+            data->current_num++;
+            cout << "[ State ] number = " << data->current_num << endl;
+            pthread_mutex_unlock(&lock);
+            usleep(200000);
         }
-        return nullptr;
     }
-
-    static auto pipeThreadFunc(void* arg) -> void* {
-        Server* server = static_cast<Server*>(arg);
-        char buf[100];
-        while (server->running) {
-            memset(buf, 0, sizeof(buf));
-            ssize_t n = read(server->pipeFd, buf, sizeof(buf));
-            if (n > 0) {
-                pthread_mutex_lock(&server->lock);
-                if (!server->data->gameover) {
-                    int playerId, cnt;
-                    sscanf(buf, "%d %d", &playerId, &cnt);
-                    cout << "[ PIPE ] 요청 수신 -> P" << playerId << " " << cnt << "개" << endl;
-                    for (int i = 0; i < cnt; i++) {
-                        server->data->current_num++;
-                        cout << "[ PIPE ] 현재 숫자 -> " << server->data->current_num << endl;
-                        if (server->data->current_num >= MAX_NUM) {
-                            server->data->gameover = true;
-                            strcpy(server->data->last_caller, ("P" + to_string(playerId)).c_str());
-                            cout << "[ PIPE ] 게임 종료 (" << server->data->last_caller << "가 31을 외침)" << endl;
-                            pthread_mutex_unlock(&server->lock);
-                            pthread_exit(nullptr);
-                        }
-                        sleep(1);
-                    }
-                    server->data->current_turn = (playerId == 1) ? 2 : 1;    
-                }
-                pthread_mutex_unlock(&server->lock);    
-            }
-            sleep(1);
-        }
-        return nullptr;
+    auto switchTurn() -> void {
+        pthread_mutex_lock(&lock);
+        data->current_turn = (data->current_turn == 1 ? 2 : 1);
+        pthread_mutex_unlock(&lock);
     }
-
-    static auto broadcastThreadFunc(void* arg) -> void* {
-        Server* server = (Server*)arg;
-        while (server->running) {
-            pthread_mutex_lock(&server->lock);
-            if (server->data->gameover) {
-                pthread_mutex_unlock(&server->lock);
-                break;
-            }
-            cout << "[ Server ] 상태 전파 (현재 숫자 = " << server->data->current_num << ", 다음 턴 Proceess ID " << server->data->current_turn << ")" << endl;
-            pthread_mutex_unlock(&server->lock);
-            sleep(3);
-        }
-        return nullptr;
+    auto setGameOver(const string& caller) -> void {
+        pthread_mutex_lock(&lock);
+        data->gameover = true;
+        strncpy(data->last_caller, caller.c_str(), sizeof(data->last_caller));
+        pthread_mutex_unlock(&lock);
     }
-    auto start() -> void {
-        pthread_create(&recieve, nullptr, recieveThreadFunc, this);
-        pthread_create(&broadcast, nullptr, broadcastThreadFunc, this);
-        pthread_create(&recieve_pipe, nullptr, pipeThreadFunc, this);
-    }
-    auto wait() -> void {
-        pthread_join(recieve, nullptr);
-        pthread_join(broadcast, nullptr);
-        pthread_join(recieve_pipe, nullptr);
-    }
-    auto cleanUp() -> void {
-        cout << "[ Server ] 종료 시그널 감지 (자원 해제 중,,,)" << endl;
-        shmdt(data);
-        shmctl(shmId, IPC_RMID, nullptr);
-        msgctl(msgId, IPC_RMID, nullptr);
-        close(pipeFd);
-        unlink(PIPE_PATH);
+    ~GameState() {
         pthread_mutex_destroy(&lock);
-    }
-    ~Server() {
-        cleanUp(); // 소멸자 객체 통해 모든 자원 반환
     }
 };
 
-Server* server_sig = nullptr;
-auto sigHandler(int signNo) { // SIGINT(2)를 매개변수로 받음
-    if (server_sig) server_sig->cleanUp();
-    exit(0);
-}
+// 비즈니스 로직 담당
+// [ SRP : 단일 책임 원칙 ] -> 게임 규칙만 처리
+// [ DIP : 의존 역전 원칙 ] -> GameState 클래스를 인터페이스처럼 사용
+class GameLogic {
+    GameState& state;
+public:
+    explicit GameLogic(GameState& s) : state(s) {}
+    void applyMove(int playerId, int cnt) {
+        if (state.isGameOver()) return;
+        if (playerId != state.getTurn()) {
+            cout << "[ logic ] 잘못된 턴 접근 P" << playerId << endl;
+            return;
+        }
+        state.updateNumber(cnt);
+        if (state.getNumber() >= MAX_NUM) {
+            state.setGameOver("P" + to_string(playerId));
+            cout << "[ logic ] Game Over ( by P" << playerId << " )" << endl;
+            return;
+        }
+        state.switchTurn();
+    }
+};
+
+// [ ISP : 인터페이스 분리 원칙 ] -> 입력 수신 기능만 제공 (추상 클래스)
+// [ DIP : 의존 역전 원칙 ] -> 상위 모듈(ServerApp)이 추상화에 의존
+class IReceiver {
+public:
+    // 순수 가상 함수는 상속 받는 자식 클래스에서 반드시 구현(오버라이딩)되어야 한다.
+    // C++에선 자바와는 달리 virtual 키워드를 선언해야 실질적인 overriding이 된다. (안 쓰면 본인 객체의 결과가 나옴)
+    virtual void start() = 0; // 순수 가상 함수를 의미함 (이게 있다면 추상 클래스 == 인터페이스)
+    virtual ~IReceiver() = default;
+};
+
+// [ OCP : 개방 폐쇄 원칙 ] -> 새로운 수신 방식 추가 시 기존 코드 수정 없음
+// [ LSP : 리스코프 치환 법칙 ] -> IReceiver 기능을 대체 가능
+class MessageQueueReceiver : public IReceiver {
+    int msgId;
+    GameLogic& logic;
+public:
+    MessageQueueReceiver(int id, GameLogic& gl) : msgId{id}, logic{gl} {}
+    void start() override {
+        MsgQueue msg{};
+        while (true) {
+            if (msgrcv(msgId, &msg, sizeof(msg.msg_text), 1, 0) != -1) {
+                int pid{}, cnt{};
+                sscanf(msg.msg_text, "%d %d", &pid, &cnt);
+                cout << "[ MessageQueue ] P" << pid << " -> " << cnt << endl;
+                logic.applyMove(pid, cnt);
+            }
+        }
+    }
+};
+
+// [ OCP : 개방 폐쇄 원칙 ] -> 새로운 수신 채널로 확장이 가능
+// [ LSP : 리스코프 치환 법칙 ] -> IReceiver 기능 대체 가능
+class PipeReceiver : public IReceiver {
+    int pipeFd;
+    GameLogic& logic;
+public:
+    PipeReceiver(int fd, GameLogic& gl) : pipeFd{fd}, logic{gl} {}
+    void start() override {
+        char buf[100];
+        while (true) {
+            memset(buf, 0, sizeof(buf));
+            ssize_t n = read(pipeFd, buf, sizeof(buf));
+            if (n > 0) {
+                int pid{}, cnt{};
+                sscanf(buf, "%d %d", &pid, &cnt);
+                cout << "[ PIPE ] P" << pid << " -> " << cnt << endl;
+                logic.applyMove(pid, cnt);
+            }
+            sleep(1);
+        }
+    }
+};
+
+// [ SRP : 단일 책임 원칙 ] -> 출력 역할만 담당
+class Broadcaster {
+    GameState& state;
+public:
+    explicit Broadcaster(GameState& s) : state{s} {}
+    void start() {
+        while (!state.isGameOver()) {
+            cout << "[ Broadcast ] number = " << state.getNumber();
+            cout << ", Next = P" << state.getTurn() << endl;
+            sleep(3);
+        }
+        cout << "[ Broadcast ] 종료 : " << state.getCaller() << endl;
+    }
+};
+
+// [ SRP : 단일 책임 원칙 ] -> 서버 실행/스레드 관리 전담
+// [ DIP : 의존 역전 원칙 ] -> IReceiver 추상 클래스에만 의존
+// [ OCP : 개방 폐쇄 원칙 ] -> Receiver 추가 시 기존 코드 변경 없음
+class ServerApp {
+    GameState& state;
+    GameLogic& logic;
+    Broadcaster& bc;
+    vector<IReceiver*> receivers;
+public:
+    ServerApp(GameState& s, GameLogic& l, Broadcaster& b) : state{s}, logic{l}, bc{b} {}
+    void addReceiver(IReceiver* r) {
+        receivers.emplace_back(r); 
+    }
+    static void* receiverThread(void* arg) {
+        static_cast<IReceiver*>(arg)->start();
+        return nullptr;
+    }
+    static void* bcThread(void* arg) {
+        static_cast<Broadcaster*>(arg)->start();
+        return nullptr;
+    }
+    void run() {
+        cout << "==========================" << endl;
+        cout << "[Server] BR31 Server Start" << endl;
+        cout << "==========================" << endl;
+
+        for (auto &r : receivers) {
+            pthread_t t{};
+            pthread_create(&t, nullptr, receiverThread, r);
+            pthread_detach(t);
+        }
+
+        pthread_t bt{};
+        pthread_create(&bt, nullptr, bcThread, &bc);
+        pthread_detach(bt);
+    }
+};
 
 int main() {
 
-    signal(SIGINT, sigHandler);
-    server_sig = new Server();
-    server_sig->start();
-    server_sig->wait();
-    delete server_sig;
+    signal(SIGINT, [](int) {
+        cout << "[ Server ] SIGINT(2) 입력 감지 (서버 종료)" << endl;
+        exit(0);
+    });
+
+    int shmId = shmget(SHM_KEY, sizeof(SharedData), 0666 | IPC_CREAT);
+    if (shmId == -1) { perror("shmget"); return 1; }
+
+    SharedData* shared = (SharedData*)shmat(shmId, nullptr, 0);
+    if (shared == (void*)-1) {
+        perror("shmat");
+        return 1;
+    }
+    memset(shared, 0, sizeof(SharedData));
+    shared->current_turn = 1;
+
+    int msgId = msgget(MSG_KEY, 0666 | IPC_CREAT);
+    if (msgId == -1) { perror("msgget"); return 1; }
+
+    if (mkfifo(PIPE_PATH, 0666) == -1 && errno != EEXIST) {
+        perror("PIPE(mkfifo)");
+        return 1;
+    }
+    int pipeFd = open(PIPE_PATH, O_RDONLY | O_NONBLOCK);
+
+    GameState state(shared);
+    GameLogic logic(state); 
+    Broadcaster bc(state);
+
+    MessageQueueReceiver mq(msgId, logic);
+    PipeReceiver pr(pipeFd, logic);
+
+    ServerApp server(state, logic, bc);
+    server.addReceiver(&mq);
+    server.addReceiver(&pr);
+
+    server.run();
+
+    pause();
 
     return 0;
 }
