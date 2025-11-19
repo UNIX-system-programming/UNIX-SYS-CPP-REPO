@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <sys/ipc.h>
+#include <sys/sem.h>
 #include <sys/msg.h>
 #include <sys/shm.h>
 #include <unistd.h>
@@ -18,18 +19,19 @@
 using namespace std;
 
 #define SHM_KEY 60011
-#define MSG_KEY 60012
+#define SEM_KEY 60012
+// #define MSG_KEY 60013
 #define MAX_NUM 31
 #define PIPE_PATH "/tmp/br31_server_fifo"
 
-struct MsgQueue {
-    long msg_type;
-    char msg_text[100];
-}; // message queue 구조체
+// struct MsgQueue {
+//     long msg_type;
+//     char msg_text[100];
+// }; // message queue 구조체
 
 struct SharedData {
     int current_num; // 현재 숫자
     int current_turn; // 현재 턴
     char last_caller[20];
     bool gameover;
-};// 공유 메모리 구조체
+}; // 공유 메모리 구조체
