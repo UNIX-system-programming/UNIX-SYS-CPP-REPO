@@ -62,7 +62,10 @@ struct SharedData {
 ## 실행 방법 
 ```bash
 ipcrm -a
-make -f Makefile.sem clean
-make -f Makefile.sem all
-make -f Makefile.sem run
+make -f Makefile.adv clean
+make -f Makefile.adv all
+make -f Makefile.adv run
+
+# alias로 만들면 더 편함
+alias=run"ipcrm -a && make -f Makefile.adv clean && Makefile.adv add && Makefile.adv run"
 ```
