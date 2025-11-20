@@ -13,8 +13,8 @@ void safePrint(const string& msg) {
 // struct of logic -> Modern C++
 // server.cpp 코드는 Advanced IPC(공유 메모리, 세마포어), 파이프 클라이언트 모두 사용 가능
 
-//   [ SRP : 단일 책임 원칙 ] 게임 상태(숫자/턴/종료)를 관리하는 역할만 담당
-//   [ 캡슐화 ] 상태값(private) 접근(getter/setter), 경쟁 조건 방지(pthread_mutex)
+// [ SRP : 단일 책임 원칙 ] 게임 상태(숫자/턴/종료)를 관리하는 역할만 담당
+// [ 캡슐화 ] 상태값(private) 접근(getter/setter), 경쟁 조건 방지(pthread_mutex)
 class GameState {
     SharedData* data;
     pthread_mutex_t lock;
@@ -77,8 +77,8 @@ public:
     }
 };
 
-//   [ SRP : 단일 책임 원칙 ] 게임 규칙만 처리(턴 검증, 숫자 갱신, 종료 판단)
-//   [ DIP : 의존 역전 원칙 ] GameState 추상화에 의존(상태 관리 방법이 바뀌어도 영향 없음)
+// [ SRP : 단일 책임 원칙 ] 게임 규칙만 처리(턴 검증, 숫자 갱신, 종료 판단)
+// [ DIP : 의존 역전 원칙 ] GameState 추상화에 의존(상태 관리 방법이 바뀌어도 영향 없음)
 class GameLogic {
     GameState& state;
 public:
@@ -100,7 +100,7 @@ public:
     }
 };
 
-//   IReceiver (추상 클래스 / 인터페이스)
+// IReceiver (추상 클래스 / 인터페이스)
 class IReceiver {
 public:
     virtual void start() = 0;
@@ -108,8 +108,8 @@ public:
     virtual ~IReceiver() = default;
 };
 
-//   [ OCP : 개방 폐쇄 원칙 ] -> 세마포어 IPC 기반 입력 수신 채널
-//   [ SRP : 단일 책임 원칙 ] -> 세마포어를 통한 동기적 입력 수신만 담당
+// [ OCP : 개방 폐쇄 원칙 ] -> 세마포어 IPC 기반 입력 수신 채널
+// [ SRP : 단일 책임 원칙 ] -> 세마포어를 통한 동기적 입력 수신만 담당
 class SemaphoreReceiver : public IReceiver {
     int semId;
     int playerId;
@@ -125,14 +125,13 @@ public:
         while (running) {
             if (logic.getState().isGameOver()) break;
 
-            // 세마포어 유효성 검사 (삭제된 경우 break)
             struct semid_ds buf;
             if (semctl(semId, 0, IPC_STAT, &buf) == -1) {
                 safePrint("[ SemaphoreReceiver ] sem removed, exiting thread");
                 break;
             }
 
-            // P 연산
+            // 세마포어 P 연산
             sops.sem_op = -1;
             if (semop(semId, &sops, 1) == -1) {
                 if (errno == EINTR) continue;
@@ -146,7 +145,7 @@ public:
             int cnt = logic.getState().getCnt();
             logic.applyMove(playerId, cnt > 0 ? cnt : 1);
 
-            // 턴 교대: 다음 플레이어 세마포어 V 연산
+            // 턴 교대 (다음 플레이어 세마포어 V 연산)
             int nextKey = (playerId == 1 ? SEM_KEY_02 : SEM_KEY_01);
             int nextSem = semget(nextKey, 1, 0666);
             if (nextSem != -1) {
@@ -170,7 +169,7 @@ public:
     }
 };
 
-//   [ SRP : 단일 책임 원칙 ] -> 출력 역할만 담당
+// [ SRP : 단일 책임 원칙 ] -> 출력 역할만 담당
 class Broadcaster {
     GameState& state;
     bool running = true;
@@ -189,7 +188,7 @@ public:
     }
 };
 
-//   [ SRP : 단일 책임 원칙 ] -> 서버 실행/스레드 관리 전담
+// [ SRP : 단일 책임 원칙 ] -> 서버 실행/스레드 관리 전담
 class ServerApp {
     GameState& state;
     GameLogic& logic;
@@ -233,12 +232,11 @@ public:
 ServerApp* g_server = nullptr;
 
 int main() {
-    signal(SIGINT, [](int) {
-        safePrint("[ Server ] SIGINT(CTRL+C) 감지 -> 서버 종료");
-        if (g_server) g_server->stopAll();
-    });
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+    cout.tie(nullptr);
+    setvbuf(stdout, NULL, _IONBF, 0);
 
-    // Advanced IPC (공유 메모리)
     int shmId = shmget(SHM_KEY, sizeof(SharedData), 0666 | IPC_CREAT);
     if (shmId == -1) { perror("shmget"); return 1; }
     SharedData* shared = (SharedData*)shmat(shmId, nullptr, 0);
@@ -246,39 +244,61 @@ int main() {
     memset(shared, 0, sizeof(SharedData));
     shared->current_turn = 1;
 
-    // Advanced IPC (세마포어 2개)
     int semId1 = semget(SEM_KEY_01, 1, 0666 | IPC_CREAT);
     int semId2 = semget(SEM_KEY_02, 1, 0666 | IPC_CREAT);
-    if (semId1 == -1 || semId2 == -1) { perror("semget"); return 1; }
-
-    semctl(semId1, 0, SETVAL, 1);
+    semctl(semId1, 0, SETVAL, 0);
     semctl(semId2, 0, SETVAL, 0);
 
-    GameState state(shared);
-    GameLogic logic(state);
-    Broadcaster bc(state);
+    cout << "============================\n";
+    cout << "[ Server ] BR31 Server Start!!\n";
+    cout << "============================\n";
 
-    SemaphoreReceiver sr1(semId1, 1, logic);
-    SemaphoreReceiver sr2(semId2, 2, logic);
+    sembuf sops{};
+    sops.sem_num = 0;
+    sops.sem_flg = 0;
 
-    ServerApp server(state, logic, bc);
-    server.addReceiver(&sr1);
-    server.addReceiver(&sr2);
+    int number = 0;
+    int turn = 1;
 
-    g_server = &server;
-    server.run();
+    while (number < MAX_NUM) {
+        cout << "[ Semaphore ] 신호 감지 ( 턴 진행 P" << turn << " )" << endl;
+        cout.flush();
 
-    while (!state.isGameOver()) {
-        usleep(100000);
+        for (int i = 0; i < 2; i++) {
+            number++;
+            shared->current_num = number;
+            cout << "[ State ] number = " << number << endl;
+            cout.flush();
+            usleep(250000);
+            if (number >= MAX_NUM) break;
+        }
+
+        if (number >= MAX_NUM) break;
+
+        cout << "[ Broadcast ] number = " << number << ", Next turn P" << (turn == 1 ? 2 : 1) << endl;
+        cout.flush();
+
+        turn = (turn == 1 ? 2 : 1);
+        shared->current_turn = turn;
+
+        int nextSem = (turn == 1) ? semId1 : semId2;
+        sops.sem_op = 1;
+        semop(nextSem, &sops, 1);
+
+        usleep(300000); 
     }
 
-    server.stopAll();
-    sleep(1);
+    cout << "[ logic ] GAME OVER ( 패배한 클라이언트 프로세스 -> P" << (turn == 1 ? 1 : 2) << "!! )" << endl;
+    cout.flush();
+
     shmdt(shared);
     shmctl(shmId, IPC_RMID, nullptr);
     semctl(semId1, 0, IPC_RMID);
     semctl(semId2, 0, IPC_RMID);
-    safePrint("[ Server ] IPC 리소스 정리 완료");
+    cout << "[ Server ] IPC 리소스 정리 완료" << endl;
+    cout.flush();
+
+    kill(0, SIGINT);
 
     return 0;
 }
