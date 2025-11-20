@@ -2,6 +2,7 @@
 
 // system call -> C style
 // struct of logic -> Modern C++
+// server.cpp 코드는 Advanced IPC(공유 메모리, 세마포어), 파이프 클라이언트 모두 사용 가능
 
 //   [ SRP : 단일 책임 원칙 ] 게임 상태(숫자/턴/종료)를 관리하는 역할만 담당
 //   [ 캡슐화 ] 상태값(private) 접근(getter/setter), 경쟁 조건 방지(pthread_mutex)
@@ -11,6 +12,12 @@ class GameState {
 public:
     explicit GameState(SharedData* ptr) : data{ptr} {
         pthread_mutex_init(&lock, nullptr);
+    }
+    auto getCnt() -> int {
+        pthread_mutex_lock(&lock);
+        int c = data->current_cnt;
+        pthread_mutex_unlock(&lock);
+        return c;
     }
     auto isGameOver() -> bool {
         pthread_mutex_lock(&lock);
@@ -67,6 +74,7 @@ class GameLogic {
     GameState& state;
 public:
     explicit GameLogic(GameState& s) : state{s} {}
+    GameState& getState() { return state; }
     void applyMove(int playerId, int cnt) {
         if (state.isGameOver()) return;
         if (playerId != state.getTurn()) {
@@ -76,7 +84,7 @@ public:
         state.updateNumber(cnt);
         if (state.getNumber() >= MAX_NUM) {
             state.setGameOver("P" + to_string(playerId));
-            cout << "[ logic ] Game Over ( by P" << playerId << " )" << endl;
+            cout << "[ logic ] GAME OVER ( 패배한 클라이언트 프로세스 -> P" << playerId << "!! )" << endl;
             return;
         }
         state.switchTurn();
@@ -122,31 +130,32 @@ public:
 //   [ SRP : 단일 책임 원칙 ] -> 세마포어를 통한 동기적 입력 수신만 담당
 class SemaphoreReceiver : public IReceiver {
     int semId;
+    int playerId;
     GameLogic& logic;
     bool running = true;
 public:
-    SemaphoreReceiver(int id, GameLogic& gl) : semId{id}, logic{gl} {}
+    SemaphoreReceiver(int id, int pid, GameLogic& gl) : semId{id}, playerId{pid}, logic{gl} {}
     void start() override {
         sembuf sops{};
         sops.sem_num = 0;
-        sops.sem_flg = 0;
+        sops.sem_flg = IPC_NOWAIT;
 
         while (running) {
-            sops.sem_op = -1;
+            if (logic.getState().isGameOver()) break;
 
+            sops.sem_op = -1;
             if (semop(semId, &sops, 1) == -1) {
+                if (errno == EAGAIN) { usleep(100000); continue; }
                 if (errno == EINTR) continue;
                 perror("semop wait");
                 break;
             }
 
-            cout << "[ Semaphore ] 신호 감지 (턴 진행)" << endl;
+            cout << "[ Semaphore ] 신호 감지 (턴 진행 P" << playerId << ")" << endl;
+            int cnt = logic.getState().getCnt();  // 클라이언트가 전달한 숫자 개수 읽기
+            logic.applyMove(playerId, cnt > 0 ? cnt : 1); // 0일 경우 안전하게 1개만 처리
 
-            int playerId = 1; 
-            int cnt = 1;
-            logic.applyMove(playerId, cnt);
             sops.sem_op = 1;
-
             if (semop(semId, &sops, 1) == -1) {
                 perror("semop release");
                 break;
@@ -154,7 +163,14 @@ public:
             usleep(300000);
         }
     }
-    void stop() override { running = false; }
+    void stop() override {
+        running = false;
+        sembuf sop{};
+        sop.sem_num = 0;
+        sop.sem_op = 1; // unblock
+        sop.sem_flg = 0;
+        semop(semId, &sop, 1);
+    }
 };
 
 //   [ SRP : 단일 책임 원칙 ] -> 출력 역할만 담당
@@ -171,7 +187,7 @@ public:
             usleep(300000);
         }
         if (state.isGameOver()) {
-            cout << "[ Broadcast ] 종료 : " << state.getCaller() << endl;
+            cout << "[ Broadcast ] 패배한 클라이언트 프로세스 : " << state.getCaller() << endl;
         }
     }
 };
@@ -199,6 +215,7 @@ public:
         cout << "============================" << endl;
         cout << "[ Server ] BR31 Server Start" << endl;
         cout << "============================" << endl;
+        
         for (auto& r : receivers) {
             pthread_t t{};
             pthread_create(&t, nullptr, receiverThread, r);
@@ -222,7 +239,6 @@ int main() {
     signal(SIGINT, [](int) {
         cout << "[ Server ] SIGINT(CTRL+C) 감지 -> 서버 종료" << endl;
         if (g_server) g_server->stopAll();
-        exit(0);
     });
 
     // Advanced IPC (공유 메모리)
@@ -233,33 +249,56 @@ int main() {
     memset(shared, 0, sizeof(SharedData));
     shared->current_turn = 1;
 
-    // Advanced IPC (세마포어)
-    int semId = semget(SEM_KEY, 1, 0666 | IPC_CREAT);
-    if (semId == -1) { perror("semget"); return 1; }
-    semctl(semId, 0, SETVAL, 1); // 이진 세마포어 (초기값 1)
+    // Advanced IPC (세마포어 2개)
+    int semId1 = semget(SEM_KEY_01, 1, 0666 | IPC_CREAT);
+    int semId2 = semget(SEM_KEY_02, 1, 0666 | IPC_CREAT);
+    if (semId1 == -1 || semId2 == -1) { perror("semget"); return 1; }
+    semctl(semId1, 0, SETVAL, 1);
+    semctl(semId2, 0, SETVAL, 1);
 
     // 단방향 IPC (PIPE -> fifo)
     if (mkfifo(PIPE_PATH, 0666) == -1 && errno != EEXIST) {
         perror("PIPE(mkfifo)");
         return 1;
     }
-    int pipeFd = open(PIPE_PATH, O_RDONLY | O_NONBLOCK);
+
+    int pipeFd;
+    while (true) {
+        pipeFd = open(PIPE_PATH, O_RDONLY | O_NONBLOCK);
+        if (pipeFd != -1) break;
+        perror("PIPE open 대기 중");
+        sleep(1);
+    }
 
     GameState state(shared);
     GameLogic logic(state);
     Broadcaster bc(state);
 
-    SemaphoreReceiver sr(semId, logic);
+    SemaphoreReceiver sr1(semId1, 1, logic);
+    SemaphoreReceiver sr2(semId2, 2, logic);
     PipeReceiver pr(pipeFd, logic);
 
     ServerApp server(state, logic, bc);
-    server.addReceiver(&sr);
+    server.addReceiver(&sr1);
+    server.addReceiver(&sr2);
     server.addReceiver(&pr);
 
     g_server = &server;
     server.run();
 
-    pause();
+    while (!state.isGameOver()) {
+        usleep(100000); 
+    }
+
+    server.stopAll();
+    usleep(300000);
+    shmdt(shared);
+    shmctl(shmId, IPC_RMID, nullptr);
+    semctl(semId1, 0, IPC_RMID);
+    semctl(semId2, 0, IPC_RMID);
+    unlink(PIPE_PATH);
+
+    cout << "[ Server ] IPC 리소스 정리 완료" << endl;
 
     return 0;
 }

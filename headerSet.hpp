@@ -19,8 +19,9 @@
 using namespace std;
 
 #define SHM_KEY 60011
-#define SEM_KEY 60012
-// #define MSG_KEY 60013
+#define SEM_KEY_01 60012
+#define SEM_KEY_02 60013
+// #define MSG_KEY 60014
 #define MAX_NUM 31
 #define PIPE_PATH "/tmp/br31_server_fifo"
 
@@ -32,6 +33,7 @@ using namespace std;
 struct SharedData {
     int current_num; // 현재 숫자
     int current_turn; // 현재 턴
+    int current_cnt; // 클라이언트가 외친 숫자의 개수
     char last_caller[20];
     bool gameover;
 }; // 공유 메모리 구조체
