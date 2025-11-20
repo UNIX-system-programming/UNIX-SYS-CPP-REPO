@@ -300,5 +300,5 @@ int main() {
 
     cout << "[ Server ] IPC 리소스 정리 완료" << endl;
 
-    return 0;
+    return 0; 
 }
