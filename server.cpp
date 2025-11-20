@@ -1,5 +1,14 @@
 #include "headerSet.hpp"
 
+pthread_mutex_t print_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// 출력 순서 꼬임 문제 해결 용도로 사용하는 동기화
+void safePrint(const string& msg) {
+    pthread_mutex_lock(&print_lock);
+    cout << msg << endl;
+    pthread_mutex_unlock(&print_lock);
+}
+
 // system call -> C style
 // struct of logic -> Modern C++
 // server.cpp 코드는 Advanced IPC(공유 메모리, 세마포어), 파이프 클라이언트 모두 사용 가능
@@ -47,8 +56,8 @@ public:
         pthread_mutex_lock(&lock);
         for (int i = 0; i < cnt; i++) {
             data->current_num++;
-            cout << "[ State ] number = " << data->current_num << endl;
-            usleep(200000);
+            safePrint("[ State ] number = " + to_string(data->current_num));
+            usleep(250000);
         }
         pthread_mutex_unlock(&lock);
     }
@@ -78,13 +87,13 @@ public:
     void applyMove(int playerId, int cnt) {
         if (state.isGameOver()) return;
         if (playerId != state.getTurn()) {
-            cout << "[ logic ] 잘못된 턴 접근 P" << playerId << endl;
+            safePrint("[ logic ] 잘못된 턴 접근 P" + to_string(playerId));
             return;
         }
         state.updateNumber(cnt);
         if (state.getNumber() >= MAX_NUM) {
             state.setGameOver("P" + to_string(playerId));
-            cout << "[ logic ] GAME OVER ( 패배한 클라이언트 프로세스 -> P" << playerId << "!! )" << endl;
+            safePrint("[ logic ] GAME OVER ( 패배한 클라이언트 프로세스 -> P" + to_string(playerId) + "!! )");
             return;
         }
         state.switchTurn();
@@ -92,38 +101,11 @@ public:
 };
 
 //   IReceiver (추상 클래스 / 인터페이스)
-//   [ ISP : 인터페이스 분리 원칙 ] 입력 수신 기능만 정의
-//   [ DIP : 의존 역전 원칙 ] ServerApp은 구체 클래스(Pipe, Semaphore)에 의존하지 않음
 class IReceiver {
 public:
-    virtual void start() = 0; // 수신 루프 실행
-    virtual void stop() = 0;  // 안전 종료
+    virtual void start() = 0;
+    virtual void stop() = 0;
     virtual ~IReceiver() = default;
-};
-
-//   [ OCP : 개방 폐쇄 원칙 ] -> 새로운 수신 채널로 확장이 가능
-//   [ LSP : 리스코프 치환 법칙 ] -> IReceiver 기능 대체 가능
-class PipeReceiver : public IReceiver {
-    int pipeFd;
-    GameLogic& logic;
-    bool running = true;
-public:
-    PipeReceiver(int fd, GameLogic& gl) : pipeFd{fd}, logic{gl} {}
-    void start() override {
-        char buf[100];
-        while (running) {
-            memset(buf, 0, sizeof(buf));
-            ssize_t n = read(pipeFd, buf, sizeof(buf));
-            if (n > 0) {
-                int pid{}, cnt{};
-                sscanf(buf, "%d %d", &pid, &cnt);
-                cout << "[ PIPE ] P" << pid << " -> " << cnt << endl;
-                logic.applyMove(pid, cnt);
-            }
-            usleep(200000);
-        }
-    }
-    void stop() override { running = false; }
 };
 
 //   [ OCP : 개방 폐쇄 원칙 ] -> 세마포어 IPC 기반 입력 수신 채널
@@ -138,28 +120,43 @@ public:
     void start() override {
         sembuf sops{};
         sops.sem_num = 0;
-        sops.sem_flg = IPC_NOWAIT;
+        sops.sem_flg = 0;
 
         while (running) {
             if (logic.getState().isGameOver()) break;
 
+            // 세마포어 유효성 검사 (삭제된 경우 break)
+            struct semid_ds buf;
+            if (semctl(semId, 0, IPC_STAT, &buf) == -1) {
+                safePrint("[ SemaphoreReceiver ] sem removed, exiting thread");
+                break;
+            }
+
+            // P 연산
             sops.sem_op = -1;
             if (semop(semId, &sops, 1) == -1) {
-                if (errno == EAGAIN) { usleep(100000); continue; }
                 if (errno == EINTR) continue;
-                perror("semop wait");
+                if (errno == EINVAL || errno == EIDRM) break;
+                perror("semop P");
                 break;
             }
 
-            cout << "[ Semaphore ] 신호 감지 (턴 진행 P" << playerId << ")" << endl;
-            int cnt = logic.getState().getCnt();  // 클라이언트가 전달한 숫자 개수 읽기
-            logic.applyMove(playerId, cnt > 0 ? cnt : 1); // 0일 경우 안전하게 1개만 처리
+            safePrint("[ Semaphore ] 신호 감지 ( 턴 진행 P" + to_string(playerId) + " )");
 
-            sops.sem_op = 1;
-            if (semop(semId, &sops, 1) == -1) {
-                perror("semop release");
-                break;
+            int cnt = logic.getState().getCnt();
+            logic.applyMove(playerId, cnt > 0 ? cnt : 1);
+
+            // 턴 교대: 다음 플레이어 세마포어 V 연산
+            int nextKey = (playerId == 1 ? SEM_KEY_02 : SEM_KEY_01);
+            int nextSem = semget(nextKey, 1, 0666);
+            if (nextSem != -1) {
+                sembuf vop{};
+                vop.sem_num = 0;
+                vop.sem_op = 1;
+                vop.sem_flg = 0;
+                semop(nextSem, &vop, 1);
             }
+
             usleep(300000);
         }
     }
@@ -167,7 +164,7 @@ public:
         running = false;
         sembuf sop{};
         sop.sem_num = 0;
-        sop.sem_op = 1; // unblock
+        sop.sem_op = 1;
         sop.sem_flg = 0;
         semop(semId, &sop, 1);
     }
@@ -182,19 +179,17 @@ public:
     void stop() { running = false; }
     void start() {
         while (running && !state.isGameOver()) {
-            cout << "[ Broadcast ] number = " << state.getNumber()
-                 << ", Next = P" << state.getTurn() << endl;
-            usleep(300000);
+            safePrint("[ Broadcast ] number = " + to_string(state.getNumber()) +
+                      ", Next turn P" + to_string(state.getTurn()));
+            usleep(350000);
         }
         if (state.isGameOver()) {
-            cout << "[ Broadcast ] 패배한 클라이언트 프로세스 : " << state.getCaller() << endl;
+            safePrint("[ Broadcast ] 패배한 클라이언트 프로세스 : " + state.getCaller());
         }
     }
 };
 
 //   [ SRP : 단일 책임 원칙 ] -> 서버 실행/스레드 관리 전담
-//   [ DIP : 의존 역전 원칙 ] -> IReceiver 추상 클래스에만 의존
-//   [ OCP : 개방 폐쇄 원칙 ] -> Receiver 추가 시 기존 코드 변경 없음
 class ServerApp {
     GameState& state;
     GameLogic& logic;
@@ -212,15 +207,17 @@ public:
         return nullptr;
     }
     void run() {
-        cout << "============================" << endl;
-        cout << "[ Server ] BR31 Server Start" << endl;
-        cout << "============================" << endl;
-        
+        safePrint("============================");
+        safePrint("[ Server ] BR31 Server Start!!");
+        safePrint("============================");
+
         for (auto& r : receivers) {
             pthread_t t{};
             pthread_create(&t, nullptr, receiverThread, r);
             pthread_detach(t);
         }
+
+        sleep(2);
         pthread_t bt{};
         pthread_create(&bt, nullptr, bcThread, &bc);
         pthread_detach(bt);
@@ -229,7 +226,7 @@ public:
     void stopAll() {
         for (auto r : receivers) r->stop();
         bc.stop();
-        cout << "[ Server ] 모든 스레드 종료 요청 완료" << endl;
+        safePrint("[ Server ] 모든 스레드 종료 요청 완료");
     }
 };
 
@@ -237,7 +234,7 @@ ServerApp* g_server = nullptr;
 
 int main() {
     signal(SIGINT, [](int) {
-        cout << "[ Server ] SIGINT(CTRL+C) 감지 -> 서버 종료" << endl;
+        safePrint("[ Server ] SIGINT(CTRL+C) 감지 -> 서버 종료");
         if (g_server) g_server->stopAll();
     });
 
@@ -253,22 +250,9 @@ int main() {
     int semId1 = semget(SEM_KEY_01, 1, 0666 | IPC_CREAT);
     int semId2 = semget(SEM_KEY_02, 1, 0666 | IPC_CREAT);
     if (semId1 == -1 || semId2 == -1) { perror("semget"); return 1; }
+
     semctl(semId1, 0, SETVAL, 1);
-    semctl(semId2, 0, SETVAL, 1);
-
-    // 단방향 IPC (PIPE -> fifo)
-    if (mkfifo(PIPE_PATH, 0666) == -1 && errno != EEXIST) {
-        perror("PIPE(mkfifo)");
-        return 1;
-    }
-
-    int pipeFd;
-    while (true) {
-        pipeFd = open(PIPE_PATH, O_RDONLY | O_NONBLOCK);
-        if (pipeFd != -1) break;
-        perror("PIPE open 대기 중");
-        sleep(1);
-    }
+    semctl(semId2, 0, SETVAL, 0);
 
     GameState state(shared);
     GameLogic logic(state);
@@ -276,29 +260,25 @@ int main() {
 
     SemaphoreReceiver sr1(semId1, 1, logic);
     SemaphoreReceiver sr2(semId2, 2, logic);
-    PipeReceiver pr(pipeFd, logic);
 
     ServerApp server(state, logic, bc);
     server.addReceiver(&sr1);
     server.addReceiver(&sr2);
-    server.addReceiver(&pr);
 
     g_server = &server;
     server.run();
 
     while (!state.isGameOver()) {
-        usleep(100000); 
+        usleep(100000);
     }
 
     server.stopAll();
-    usleep(300000);
+    sleep(1);
     shmdt(shared);
     shmctl(shmId, IPC_RMID, nullptr);
     semctl(semId1, 0, IPC_RMID);
     semctl(semId2, 0, IPC_RMID);
-    unlink(PIPE_PATH);
+    safePrint("[ Server ] IPC 리소스 정리 완료");
 
-    cout << "[ Server ] IPC 리소스 정리 완료" << endl;
-
-    return 0; 
+    return 0;
 }

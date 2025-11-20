@@ -29,10 +29,14 @@ sem_client_02: sem_client_02.cpp headerSet.hpp
 run:
 	@echo "[ 서버 | 클라이언트 프로세스 P1 | 클라이언트 프로세스 P2 ] 순차 실행 시작"
 	@./server & \
-	sleep 1; \
+	server_pid=$$!; \
+	sleep 3; \
+	( while ! ipcs -s | grep -q "60012"; do sleep 0.5; done; \
+	  echo "[ WAIT OK ] 서버 IPC 완전 초기화 완료" ); \
 	./sem_client_01 & \
-	sleep 1; \
-	./sem_client_02 &
+	sleep 2; \
+	./sem_client_02 & \
+	wait $$server_pid
 
 # make clean 명령 실행 시 생성된 파일 모두 삭제
 clean:

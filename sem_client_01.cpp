@@ -27,32 +27,44 @@ int main() {
 
     cout << "[ SEM_Client_01 ] 시작됨 (세마포어 ID : " << semId << ")" << endl;
 
-    for (int i = 0; i < moveCnt; i++) {
-        shared->current_cnt = 2;
+    for (int i = 0; i < moveCnt; i += 2) {
+        if (shared->gameover) break;
 
-        // P 연산
+        // 세마포어 P 연산 (서버 턴 획득)
         sops.sem_op = -1;
         if (semop(semId, &sops, 1) == -1) {
-            if (errno == EINTR) continue;
+            if (errno == EIDRM || errno == EINVAL) break;
             perror("semop P");
             break;
         }
 
-        cout << "[ SEM_Client_01 ] 숫자 외침 : " << moves[i] 
-             << " (이번 턴 외친 개수: " << shared->current_cnt << ")" << endl;
+        // 두 개의 숫자 외침
+        for (int j = 0; j < 2 && (i + j) < moveCnt; j++) {
+            if (shared->gameover) break;
+            shared->current_cnt = 2;
 
-        // V 연산 (서버가 턴을 진행하도록 해제)
-        sops.sem_op = 1;
-        if (semop(semId, &sops, 1) == -1) {
-            perror("semop V");
-            break;
+            cout << "[ SEM_Client_01 ] 숫자 외침 : " << moves[i + j]
+                 << " (이번 턴 외친 개수: " << shared->current_cnt << ")" << endl;
+
+            // 각 숫자마다 서버에 전달 (V 연산)
+            sops.sem_op = 1;
+            if (semop(semId, &sops, 1) == -1) {
+                if (errno == EIDRM || errno == EINVAL) break;
+                perror("semop V");
+                break;
+            }
+
+            usleep(300000); // 두 숫자 사이 텀
         }
 
-        usleep(200000);
+        // 턴 종료 후 대기
+        usleep(400000);
         if (moves[i] >= MAX_NUM) break;
     }
 
+    while (!shared->gameover) usleep(100000);
     cout << "[ SEM_Client_01 ] 클라이언트 프로세스 P1 종료" << endl;
 
+    shmdt(shared);
     return 0;
 }
