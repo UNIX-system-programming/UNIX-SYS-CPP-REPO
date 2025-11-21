@@ -1,6 +1,9 @@
 # C++ 컴파일러(g++)
 CXX = g++
 
+# Use bash for recipe execution so trap/subshell syntax works reliably
+SHELL := /bin/bash
+
 # 컴파일 옵션 : -Wall(모든 경고 메세지 표시), -pthread(POSIX 스레드 라이브러리 링크)
 CXXFLAGS = -std=c++17 -Wall -pthread
 
@@ -28,16 +31,13 @@ pipe_client2: pipe_client_02.cpp headerSet.hpp
 
 run: $(TARGETS)
 	@echo "[ 서버 | 클라이언트 프로세스 P1 | 클라이언트 프로세스 P2 ] 순차 실행 시작"
-	@ipcrm -a 2>/dev/null || true; \
-	rm -f /tmp/br31_server_fifo 2>/dev/null || true; \
-	./pipe_server & \
-	sleep 2; \
-	while ! [ -p /tmp/br31_server_fifo ]; do sleep 0.5; done; \
-	echo "[ WAIT OK ] 서버 FIFO 초기화 완료"; \
-	./pipe_client1 & \
-	sleep 1; \
-	./pipe_client2 & \
-	wait
+	@./pipe_server & SERVER=$$!; \
+	while [ ! -p /tmp/br31_server_fifo ]; do sleep 0.1; done; \
+	sleep 0.3; \
+	./pipe_client1 & C1=$$!; \
+	sleep 0.3; \
+	./pipe_client2 & C2=$$!; \
+	wait $$SERVER
 
 # make clean 명령 실행 시 생성된 파일 모두 삭제
 clean:

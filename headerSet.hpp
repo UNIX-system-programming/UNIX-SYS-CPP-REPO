@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <sys/ipc.h>
+#include <sys/sem.h>
 #include <sys/msg.h>
 #include <sys/shm.h>
 #include <unistd.h>
@@ -18,6 +19,8 @@
 using namespace std;
 
 #define SHM_KEY 60011
+#define SEM_KEY_01 60012
+#define SEM_KEY_02 60013
 // #define MSG_KEY 60014
 #define MAX_NUM 31
 #define PIPE_PATH "/tmp/br31_server_fifo"
