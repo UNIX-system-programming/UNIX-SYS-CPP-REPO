@@ -1,43 +1,24 @@
-#include <iostream>
-#include <cstring>
-#include <string>
-#include <sys/ipc.h>
-#include <sys/shm.h>
-#include <sys/msg.h>
-#include <unistd.h>
-#include <cstdlib>
-#include <ctime>
-#include <pthread.h>
+#include "headerSet.hpp"
+#include <vector>
+
 using namespace std;
 
-#define SHM_KEY 60011
-#define MSG_KEY 60012
-#define PLAYERS 2
-#define MAX_NUM 31
 #define PLAYER_ID 2
 
-struct MsgQueue {
-    long msg_type;
-    char msg_text[100];
-};
-
-struct SharedData {
-    int current_num;
-    int current_turn;
-    char last_caller[20];
-    int connected_players;
-    bool gameover;
-};
-
 class ShrClient02 {
-    int shmId, msgId;
+    int shmId;
     SharedData* data;
     int playerId;
-    pthread_t monitorThread;
+    vector<int> moveSequence;
+    size_t sequenceIndex;
     bool running;
 
 public:
-    ShrClient02() : playerId(PLAYER_ID), running(true) {
+    ShrClient02() : shmId(-1), data(nullptr), playerId(PLAYER_ID), sequenceIndex(0), running(true) {
+        // 성능 측정용 고정 시퀀스: 2,4,6,8,10,12,14,16,18,20,22,24,26,28,30 (짝수)
+        moveSequence = {2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30};
+
+        // 공유메모리 접근
         shmId = shmget(SHM_KEY, sizeof(SharedData), 0666);
         if (shmId == -1) {
             perror("shmget failed");
@@ -49,118 +30,85 @@ public:
             exit(1);
         }
 
-        msgId = msgget(MSG_KEY, 0666);
-        if (msgId == -1) {
-            perror("msgget failed");
-            exit(1);
-        }
-
         cout << "================================================" << endl;
-        cout << "[ Client 02 ] 베스킨라빈스 31 서버 가동 시작" << endl;
-        cout << "[ Client 02 ] Shared Memory" << endl;
-        cout << "[ Client 02 ] Player ID: " << playerId << endl;
+        cout << "[ 클라이언트 02 ] Baskin-Robbins 31 게임 시작됨" << endl;
+        cout << "[ 클라이언트 02 ] IPC: 공유메모리" << endl;
+        cout << "[ 클라이언트 02 ] 플레이어 ID: " << playerId << endl;
+        cout << "[ 클라이언트 02 ] 시퀀스: 2,4,6,8,10,12,14,16,18,20,22,24,26,28,30 (짝수)" << endl;
         cout << "================================================" << endl;
-    }
-
-    static auto monitorThreadFunc(void* arg) -> void* {
-        ShrClient02* client = static_cast<ShrClient02*>(arg);
-        
-        while (client->running) {
-            if (client->data->gameover) {  
-                client->running = false;
-                break;
-            }
-            sleep(1);
-        }
-        return nullptr;
     }
 
     auto sendMove(int count) -> bool {
-        MsgQueue msg;
-        memset(&msg, 0, sizeof(msg));
-        msg.msg_type = 1;
-        snprintf(msg.msg_text, sizeof(msg.msg_text), "%d %d", playerId, count);
-
-        if (msgsnd(msgId, &msg, 100, 0) == -1) {
-            perror("msgsnd failed");
-            return false;
+        // 공유메모리에 직접 값 업데이트
+        data->current_num += count;
+        cout << "[ 클라이언트 02 ] " << count << "를 말합니다 -> 현재 숫자: " << data->current_num << endl;
+        
+        // 게임 종료 판정
+        if (data->current_num >= MAX_NUM) {
+            data->gameover = true;
+            strncpy(data->last_caller, "P2", sizeof(data->last_caller) - 1);
+            cout << "[ 클라이언트 02 ] 31을 말했습니다! 게임 종료!" << endl;
+            return false;  // 게임 종료 신호
         }
-        return true;
-    }
-
-    auto start() -> void {
-        pthread_create(&monitorThread, nullptr, monitorThreadFunc, this);
-    }
-
-    // 서버에 등록 메시지를 보냅니다 (접속 알림)
-    auto sendRegister() -> bool {
-        MsgQueue msg;
-        memset(&msg, 0, sizeof(msg));
-        msg.msg_type = 2; // 등록
-        snprintf(msg.msg_text, sizeof(msg.msg_text), "%d", playerId);
-        if (msgsnd(msgId, &msg, 100, 0) == -1) {
-            perror("register msgsnd failed");
-            return false;
-        }
+        
+        // 턴 변경
+        data->current_turn = (data->current_turn == 1 ? 2 : 1);
         return true;
     }
 
     auto play() -> void {
-        srand(time(nullptr) + playerId);
+        // 모든 플레이어가 준비될 때까지 대기
+        cout << "[ 클라이언트 02 ] 모든 플레이어 준비 대기 중..." << endl;
+        sleep(2);
 
-        // 서버에 접속 등록
-        sendRegister();
-
-        // 최소 PLAYERS명이 접속할 때까지 대기
-        while (!data->gameover && data->connected_players < PLAYERS) {
-            cout << "[ Client 02 ] 플레이어를 기다리는 중... (현재 접속=" << data->connected_players << ")" << endl;
-            sleep(1);
-        }
-
-        int prev_turn = -1;
+        int prevTurn = -1;
+        
         while (running && !data->gameover) {
-            // 대기 중일 때는 턴 변화가 있을 때만 간단히 출력합니다.
-            while (data->current_turn != playerId && running && !data->gameover) {
-                if (prev_turn != data->current_turn) {
-                    cout << "[ Client 02 ] 상대 턴... (현재 숫자: " << data->current_num << ", 다음 턴: " << data->current_turn << ")" << endl;
-                    prev_turn = data->current_turn;
-                }
+            // 현재 상태 확인
+            int currentTurn = data->current_turn;
+            
+            // 턴이 바뀌었으면 출력
+            if (prevTurn != currentTurn) {
+                cout << "[ 클라이언트 02 ] 현재 턴: P" << currentTurn << ", 숫자: " << data->current_num << endl;
+                prevTurn = currentTurn;
+            }
+            
+            // 내 차례 대기
+            if (currentTurn != playerId) {
                 sleep(1);
+                continue;
+            }
+            
+            // 게임 종료 확인
+            if (data->gameover) break;
+
+            // 시퀀스에서 다음 값 가져오기
+            if (sequenceIndex >= moveSequence.size()) {
+                cout << "[ 클라이언트 02 ] 시퀀스 완료" << endl;
+                break;
             }
 
-            if (!running || data->gameover) break;
+            int count = moveSequence[sequenceIndex];
+            sequenceIndex++;
 
-            int count = (rand() % 3) + 1;
-
-            // 요청을 서버에 전송한 후 공유 메모리의 변경을 관찰합니다
-            int prev = data->current_num;
-            sendMove(count);
-
-            while (!data->gameover) {
-                if (data->current_num > prev) {
-                    for (int n = prev + 1; n <= data->current_num; ++n) {
-                        cout << "[ Client 02 ] " << n << endl;
-                        usleep(150000);
-                    }
-                    prev = data->current_num;
-                }
-                if (data->current_turn != playerId) break;
-                usleep(100000);
+            // 서버에 이동 전송 (공유메모리 직접 수정)
+            if (!sendMove(count)) {
+                // 게임 종료
+                break;
             }
 
-            prev_turn = data->current_turn;
             sleep(1);
         }
-    }
 
-    auto wait() -> void {
-        pthread_join(monitorThread, nullptr);
+        if (data->gameover) {
+            cout << "\n[ 클라이언트 02 ] 게임 종료! " << data->last_caller << "이(가) 31을 말했습니다!" << endl;
+        }
     }
 
     auto cleanUp() -> void {
-        cout << "[ Client 02 ] 종료 중..." << endl;
+        cout << "[ 클라이언트 02 ] 종료 중..." << endl;
         running = false;
-        shmdt(data);
+        if (data != nullptr) shmdt(data);
     }
 
     ~ShrClient02() {
@@ -170,9 +118,6 @@ public:
 
 int main() {
     ShrClient02 client;
-    client.start();
     client.play();
-    client.wait();
-
     return 0;
 }

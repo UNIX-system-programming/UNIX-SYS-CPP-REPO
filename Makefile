@@ -23,8 +23,15 @@ clean:
 
 # 간단 실행: 서버를 백그라운드로 띄우고 클라이언트들을 실행합니다.
 run: all
+	@echo "Cleaning up old IPC resources..."
+	@ipcrm -a 2>/dev/null || true
+	@rm -f /tmp/br31_server_fifo 2>/dev/null || true
+	@echo "Starting server..."
 	./server &
-	sleep 1
+	@sleep 2
+	@echo "Starting clients..."
 	./client01 &
-	sleep 1
+	@sleep 1
 	./client02 &
+	@echo "Game in progress... (watching output)"
+	@wait
