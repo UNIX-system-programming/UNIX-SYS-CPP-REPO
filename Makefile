@@ -23,18 +23,15 @@ clean:
 
 # 간단 실행: 서버를 백그라운드로 띄우고 클라이언트들을 실행합니다.
 run: pipe_server pipe_client1 pipe_client2
-	@echo "Cleaning up old IPC resources..."
 	@ipcrm -a 2>/dev/null || true
 	@rm -f /tmp/br31_server_fifo 2>/dev/null || true
-	@echo "Starting pipe server..."
-	./pipe_server &
+	@(./pipe_server &) 
+	@sleep 3
+	@(./pipe_client1 &)
 	@sleep 2
-	@echo "Starting pipe clients..."
-	./pipe_client1 &
-	@sleep 1
-	./pipe_client2 &
-	@echo "Pipe game in progress... (watching output)"
-	@wait
+	@(./pipe_client2 &)
+	@sleep 20
+	@pkill -f "pipe_server|pipe_client" 2>/dev/null || true
 
 # pipe build targets (allow running pipe server/clients from repo root)
 pipe_server: pipe_server.cpp

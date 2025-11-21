@@ -25,12 +25,6 @@ int main() {
         int remaining = moveCnt - i;
         int cnt = remaining >= 2 ? 2 : 1;
 
-        // print numbers we will say (for readability)
-        for (int j = 0; j < cnt; ++j) {
-            cout << "[ PIPE_Client_01 ] 숫자 외침: " << moves[i+j] << endl;
-            usleep(100000);
-        }
-
         // send move to server via PIPE: "playerId cnt"
         int written = 0;
         for (int attempt = 0; attempt < 5 && !written; ++attempt) {

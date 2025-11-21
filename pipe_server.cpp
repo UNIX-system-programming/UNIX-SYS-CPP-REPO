@@ -73,6 +73,7 @@ public:
             safePrint("[ logic ] 잘못된 턴 접근 P" + to_string(playerId));
             return;
         }
+        safePrint("[ Pipe ] 신호 감지 ( 턴 진행 P" + to_string(playerId) + " )");
         state.updateNumber(cnt);
         if (state.getNumber() >= MAX_NUM) {
             state.setGameOver("P" + to_string(playerId));
@@ -107,7 +108,6 @@ public:
             if (n > 0) {
                 int pid = 0, cnt = 0;
                 sscanf(buf, "%d %d", &pid, &cnt);
-                safePrint("[ PIPE ] P" + to_string(pid) + " -> " + to_string(cnt));
                 logic.applyMove(pid, cnt);
             } else {
                 usleep(200000);
@@ -125,9 +125,17 @@ public:
     explicit Broadcaster(GameState& s) : state{s} {}
     void stop() { running = false; }
     void start() {
+        int lastNum = -1;
+        int lastTurn = -1;
         while (running && !state.isGameOver()) {
-            safePrint("[ Broadcast ] number = " + to_string(state.getNumber()) + ", Next turn P" + to_string(state.getTurn()));
-            usleep(350000);
+            int num = state.getNumber();
+            int turn = state.getTurn();
+            if (num != lastNum || turn != lastTurn) {
+                safePrint("[ Broadcast ] number = " + to_string(num) + ", Next turn P" + to_string(turn));
+                lastNum = num;
+                lastTurn = turn;
+            }
+            usleep(150000);
         }
         if (state.isGameOver()) safePrint("[ Broadcast ] 패배한 클라이언트 프로세스 : " + state.getCaller());
     }
@@ -138,10 +146,10 @@ class ServerApp {
     GameState& state;
     GameLogic& logic;
     Broadcaster& bc;
-    vector<IReceiver*> receivers;
+    std::vector<IReceiver*> receivers;
 public:
     ServerApp(GameState& s, GameLogic& l, Broadcaster& b) : state{s}, logic{l}, bc{b} {}
-    void addReceiver(IReceiver* r) { receivers.emplace_back(r); }
+    void addReceiver(IReceiver* r) { receivers.push_back(r); }
     static void* receiverThread(void* arg) { reinterpret_cast<IReceiver*>(arg)->start(); return nullptr; }
     static void* bcThread(void* arg) { reinterpret_cast<Broadcaster*>(arg)->start(); return nullptr; }
     void run() {
@@ -149,7 +157,7 @@ public:
         safePrint("[ Pipe Server ] BR31 Pipe Server Start!!");
         safePrint("============================");
 
-        for (auto& r : receivers) {
+        for (auto r : receivers) {
             pthread_t t{};
             pthread_create(&t, nullptr, receiverThread, r);
             pthread_detach(t);

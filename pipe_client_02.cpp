@@ -25,11 +25,6 @@ int main() {
         int remaining = moveCnt - i;
         int cnt = remaining >= 2 ? 2 : 1;
 
-        for (int j = 0; j < cnt; ++j) {
-            cout << "[ PIPE_Client_02 ] 숫자 외침: " << moves[i+j] << endl;
-            usleep(100000);
-        }
-
         int written = 0;
         for (int attempt = 0; attempt < 5 && !written; ++attempt) {
             int fd = open(PIPE_PATH, O_WRONLY | O_NONBLOCK);
