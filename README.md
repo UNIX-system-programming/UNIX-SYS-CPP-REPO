@@ -58,3 +58,14 @@ struct SharedData {
 - `Server::cleanUp()` 함수 호출
 - 공유 메모리, 메세지 큐, 파이프의 자원을 해제
 - 데드락 방지를 위해 뮤텍스 락 해제
+---
+## 실행 방법 
+```bash
+ipcrm -a
+make -f Makefile.adv clean
+make -f Makefile.adv all
+make -f Makefile.adv run
+
+# alias로 만들면 더 편함
+alias=run"ipcrm -a && make -f Makefile.adv clean && Makefile.adv add && Makefile.adv run"
+```
