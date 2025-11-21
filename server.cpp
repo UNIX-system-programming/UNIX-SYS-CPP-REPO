@@ -140,7 +140,7 @@ public:
                 break;
             }
 
-            safePrint("[ Semaphore ] 신호 감지 ( 턴 진행 P" + to_string(playerId) + " )");
+            safePrint("[ Semaphore ] ( 신호 감지 -> 턴 진행 P" + to_string(playerId) + " )");
 
             int cnt = logic.getState().getCnt();
             logic.applyMove(playerId, cnt > 0 ? cnt : 1);
@@ -178,8 +178,7 @@ public:
     void stop() { running = false; }
     void start() {
         while (running && !state.isGameOver()) {
-            safePrint("[ Broadcast ] number = " + to_string(state.getNumber()) +
-                      ", Next turn P" + to_string(state.getTurn()));
+            safePrint("[ Broadcast ] 다음 턴 P" + to_string(state.getTurn()));
             usleep(350000);
         }
         if (state.isGameOver()) {
@@ -261,13 +260,14 @@ int main() {
     int turn = 1;
 
     while (number < MAX_NUM) {
-        cout << "[ Semaphore ] 신호 감지 ( 턴 진행 P" << turn << " )" << endl;
+        cout << "[ Semaphore ] ( 신호 감지 -> 턴 진행 P" << turn << " )" << endl;
         cout.flush();
 
         for (int i = 0; i < 2; i++) {
+            int temp = (turn == 1) ? 1 : 2;
             number++;
             shared->current_num = number;
-            cout << "[ State ] number = " << number << endl;
+            cout << "[ Client P" << temp << " ] 외친 숫자 = " << number << endl;
             cout.flush();
             usleep(250000);
             if (number >= MAX_NUM) break;
@@ -275,7 +275,7 @@ int main() {
 
         if (number >= MAX_NUM) break;
 
-        cout << "[ Broadcast ] number = " << number << ", Next turn P" << (turn == 1 ? 2 : 1) << endl;
+        cout << "[ Broadcast ] ( 턴 교체 -> 다음 턴 P" << (turn == 1 ? 2 : 1) << " )" << endl;
         cout.flush();
 
         turn = (turn == 1 ? 2 : 1);
@@ -288,7 +288,7 @@ int main() {
         usleep(300000); 
     }
 
-    cout << "[ logic ] GAME OVER ( 패배한 클라이언트 프로세스 -> P" << (turn == 1 ? 1 : 2) << "!! )" << endl;
+    cout << "[ Result ] GAME OVER ( 패배한 클라이언트 -> P" << (turn == 1 ? 1 : 2) << "!! )" << endl;
     cout.flush();
 
     shmdt(shared);
